@@ -97,7 +97,7 @@ export default class SqlQuery {
         if (typeof this.target.dateColDataType == "string" && this.target.dateColDataType.length > 0) {
             timeFilter = SqlQuery.getDateFilter(this.options.rangeRaw.to === 'now') + ' AND ' + timeFilter
         }
-        this.target.rawQuery = query
+        this.target.timeFilterQuery = query
             .replace(/\$timeSeries/g, SqlQuery.getTimeSeries(dateTimeType))
             .replace(/\$timeFilter/g, timeFilter)
             .replace(/\$table/g, SqlQuery.escapeIdentifier(this.target.database) + '.' + SqlQuery.escapeIdentifier(this.target.table))
@@ -110,7 +110,7 @@ export default class SqlQuery {
         const round = this.target.round === "$step"
           ? interval
           : SqlQuery.convertInterval(this.target.round, 1);
-        this.target.rawQuery = SqlQuery.replaceTimeFilters(this.target.rawQuery, this.options.range, dateTimeType, round);
+        this.target.rawQuery = SqlQuery.replaceTimeFilters(this.target.timeFilterQuery, this.options.range, dateTimeType, round);
 
         return this.target.rawQuery;
     }    
