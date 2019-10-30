@@ -31,7 +31,7 @@ export default class SqlQuery {
     }
 
     replace(options, adhocFilters) {
-        var query = this.templateSrv.replace(this.target.query.trim(), options.scopedVars, SqlQuery.interpolateQueryExpr),
+        var query = this.templateSrv.replace(SqlQuery.conditionalTest(this.target.query.trim(),this.templateSrv), options.scopedVars, SqlQuery.interpolateQueryExpr),
             scanner = new Scanner(query),
             dateTimeType = this.target.dateTimeType
                 ? this.target.dateTimeType
@@ -39,6 +39,7 @@ export default class SqlQuery {
             i = this.templateSrv.replace(this.target.interval, options.scopedVars) || options.interval,
             interval = SqlQuery.convertInterval(i, this.target.intervalFactor || 1),
             adhocCondition = [];
+
         try {
             let ast = scanner.toAST();
             let topQuery = ast;
@@ -70,7 +71,8 @@ export default class SqlQuery {
                         return
                     }
                     let operator = SqlQuery.clickhouseOperator(af.operator);
-                    let cond = parts[2] + " " + operator + " " + af.value;
+                    let cond = parts[2] + " " + operator + " "
+                        + ((af.value.indexOf("'") > -1 || af.value.indexOf(", ") > -1) ? af.value : "'" + af.value + "'");
                     adhocCondition.push(cond);
                     if (ast.where.length > 0) {
                         // OR is not implemented
@@ -81,6 +83,7 @@ export default class SqlQuery {
                 });
                 query = scanner.Print(topQuery);
             }
+
             query = SqlQuery.applyMacros(query, ast)
         } catch (err) {
             console.error('AST parser error: ', err)
@@ -97,10 +100,16 @@ export default class SqlQuery {
         if (typeof this.target.dateColDataType == "string" && this.target.dateColDataType.length > 0) {
             timeFilter = SqlQuery.getDateFilter(this.options.rangeRaw.to === 'now') + ' AND ' + timeFilter
         }
+
+        let table = SqlQuery.escapeIdentifier(this.target.table);
+        if (this.target.database) {
+            table =  SqlQuery.escapeIdentifier(this.target.database) + '.' + table;
+        }
+
         this.target.timeFilterQuery = query
             .replace(/\$timeSeries/g, SqlQuery.getTimeSeries(dateTimeType))
             .replace(/\$timeFilter/g, timeFilter)
-            .replace(/\$table/g, SqlQuery.escapeIdentifier(this.target.database) + '.' + SqlQuery.escapeIdentifier(this.target.table))
+            .replace(/\$table/g, table)
             .replace(/\$dateCol/g, SqlQuery.escapeIdentifier(this.target.dateColDataType))
             .replace(/\$dateTimeCol/g, SqlQuery.escapeIdentifier(this.target.dateTimeColDataType))
             .replace(/\$interval/g, interval)
@@ -113,10 +122,12 @@ export default class SqlQuery {
         this.target.rawQuery = SqlQuery.replaceTimeFilters(this.target.timeFilterQuery, this.options.range, dateTimeType, round);
 
         return this.target.rawQuery;
-    }    
-    
+    }
+
     static escapeIdentifier(identifier: string): string {
-        if (/^[a-zA-Z_][0-9a-zA-Z_]*$/.test(identifier)) {
+        if (/^[a-zA-Z_][0-9a-zA-Z_]*$/.test(identifier)
+            || /\(.*\)/.test(identifier)
+        ) {
             return identifier;
         } else {
             return '`' + identifier.replace(/`/g, '``') + '`';
@@ -545,6 +556,51 @@ export default class SqlQuery {
             return "'" + value.replace(/[\\']/g, '\\$&') + "'";
         }
     }
+    static conditionalTest(query,templateSrv) {
+        let macros = '$conditionalTest(';
+        let openMacros = query.indexOf(macros);
+        while (openMacros !== -1) {
+            let r = SqlQuery.betweenBraces(query.substring(openMacros+macros.length, query.length));
+            if (r.error.length > 0) {
+                throw {message: '$conditionalIn macros error: ' + r.error};
+            }
+            let arg = r.result;
+            // first parameters is an expression and require some complex parsing , so parse from the end where you know that the last parameters is a comma with a variable
+            let param1 = arg.substring(0,arg.lastIndexOf(',')).trim();
+            let param2 = arg.substring(arg.lastIndexOf(',')+1).trim();
+            // remove the $ from the variable
+            let varinparam = param2.substring(1);
+            let done = 0;
+            //now find in the list of variable what is the value
+	     for(var i=0;i<templateSrv.variables.length;i++){
+		var varG = templateSrv.variables[i];
+		if(varG.name===varinparam){
+                    let closeMacros = openMacros + macros.length + r.result.length + 1;
+                    done = 1;
+		    if(
+			    // for query variable when all is selected
+			    // may be add another test on the all activation may be wise.
+			    (varG.type==='query' && ((varG.current.value.length==1 && varG.current.value[0]==='$__all')
+                || (typeof(varG.current.value) === 'string' && varG.current.value === '$__all'))) ||
+			    // for textbox variable when nothing is entered
+			    (varG.type==='textbox' && varG.current.value==='')){
+                        query = query.substring(0, openMacros)  + ' ' + query.substring(closeMacros, query.length);
+                      }else{
+                        // replace of the macro with standard test.
+                         query = query.substring(0, openMacros) + ' ' + param1 + ' '+ query.substring(closeMacros, query.length);
+                    }
+                    break;
+                }
+            }
+            if(done==0){
+              throw {message: '$conditionalTest macros error cannot find referenced variable: ' + param2};
+            }
+            openMacros = query.indexOf(macros);
+        }
+        return query
+    }
+
+
 
     static unescape(query) {
         let macros = '$unescape(';
