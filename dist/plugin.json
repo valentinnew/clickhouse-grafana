@@ -5,7 +5,7 @@
 
   "metrics": true,
   "annotations": true,
-  "alerting": false,
+  "alerting": true,
 
   "info": {
     "description": "ClickHouse datasource for Grafana",
